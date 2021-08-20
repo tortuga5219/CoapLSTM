@@ -1,0 +1,9 @@
+# This file may be used to create an environment using:
+# $ conda create --name <env> --file <this file>
+# platform: win-64
+keras-applications=1.0.8=py_1
+numpy=1.19.2=py37hadc3359_0
+pandas=1.3.1=py37h6214cd6_0
+python=3.7.11=h6244533_0
+tensorflow-base=2.3.0=eigen_py37h17acbac_0
+

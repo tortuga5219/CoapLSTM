@@ -1,0 +1,117 @@
+# running tests twice, so if something breaks when optional dependencies are
+# missing, it still shows up. (full coverage would mean running each
+# combination, but let's not blow the test matrix out of proportion).
+test:3.7:
+  image: "python:3.7"
+  script:
+    - env
+    - echo Using cache:; ls .eggs/ || echo No cached .eggs found
+    - rm -f .coverage* collected-coverage
+    - pip3 install coverage
+    - AIOCOAP_TEST_EXTRAS= python3 -m coverage run --parallel ./setup.py test
+    - python3 -m coverage run --parallel ./setup.py test
+    - pip3 install uvloop
+    - AIOCOAP_TESTS_LOOP=uvloop python3 -m coverage run --parallel ./setup.py test
+    # Could just as well do this on the default main loop, but AFAIR uvloop
+    # required occasional workarounds
+    - AIOCOAP_TESTS_LOOP=uvloop AIOCOAP_CLIENT_TRANSPORT=oscore:simple6 AIOCOAP_SERVER_TRANSPORT=oscore:simplesocketserver python3 -m coverage run --parallel ./setup.py test
+    # Not installing python3-gi directly, as Debian's dist-modules is not in
+    # docker image's Python path
+    - apt-get update
+    - apt-get -y install libgirepository1.0-dev
+    - pip3 install pygobject gbulb
+    - AIOCOAP_TESTS_LOOP=gbulb timeout 10m python3 -m coverage run --parallel ./setup.py test || echo Letting failing gbulb test slide
+    - mkdir collected-coverage/3.7/ -p
+    - mv .coverage* collected-coverage/3.7/
+    - "AIOCOAP_TEST_MCIF=\"$(ip -j -6 route list default | python3 -c 'import sys, json; print(json.load(sys.stdin)[0][\"dev\"])')\" ./setup.py test"
+  artifacts:
+    paths:
+      - collected-coverage/3.7/
+  cache:
+    key: python3.7
+    paths:
+      - .eggs/
+
+test:tox:
+  image: debian:bullseye
+  variables:
+    # Excluding 3.8 means 3.8 is not tested at all :-/
+    TOX_SKIP_ENV: "py3[78]|pypy"
+  script:
+    - rm -f .coverage* collected-coverage
+    - apt-get update
+    - apt-get -y install tox build-essential python3-dev libssl-dev autoconf python3-setuptools python3-pip
+    # Separate run so I don't waste time telling errors in setup apart from errors at runtime
+    - tox --notest
+    - "AIOCOAP_TEST_MCIF=\"$(ip -j -6 route list default | python3 -c 'import sys, json; print(json.load(sys.stdin)[0][\"dev\"])')\" tox"
+    - mkdir collected-coverage/tox-bullseye/ -p
+    - mv .coverage* collected-coverage/tox-bullseye/
+  artifacts:
+    paths:
+      - collected-coverage/tox/
+
+test:tox-on-buster:
+  image: debian:buster
+  variables:
+    TOX_SKIP_ENV: "py3[89]|pypy"
+  script:
+    - rm -f .coverage* collected-coverage
+    - apt-get update
+    - apt-get -y install tox build-essential python3-dev libssl-dev autoconf python3-setuptools python3-pip
+    # Separate run so I don't waste time telling errors in setup apart from errors at runtime
+    - tox --notest
+    - "AIOCOAP_TEST_MCIF=\"$(ip -j -6 route list default | python3 -c 'import sys, json; print(json.load(sys.stdin)[0][\"dev\"])')\" tox"
+    - mkdir collected-coverage/tox-buster/ -p
+    - mv .coverage* collected-coverage/tox-buster/
+  artifacts:
+    paths:
+      - collected-coverage/tox/
+
+test:tox-on-pypy:
+  image: pypy:3.7
+  variables:
+    TOX_SKIP_ENV: "py3."
+  script:
+    - rm -f .coverage* collected-coverage
+    - apt-get update
+    # Less to install here as the pypy container should contain full pypy with all its pip etc. already
+    - apt-get -y install build-essential libssl-dev autoconf
+    # Rust 1.45? Not on this backend. But no wheels for pypy either, it seems.
+    - "sh <(curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs) -y"
+    # as requested by Rust -- this is all going line by line into a shell script, after all (unlike in a Makefile)
+    - "export PATH=${PATH}:${HOME}/.cargo/bin"
+    - pip install tox
+    # Separate run so I don't waste time telling errors in setup apart from errors at runtime
+    - tox --notest
+    - "AIOCOAP_TEST_MCIF=\"$(ip -j -6 route list default | python3 -c 'import sys, json; print(json.load(sys.stdin)[0][\"dev\"])')\" tox"
+    - mkdir collected-coverage/tox-pypy/ -p
+    - mv .coverage* collected-coverage/tox-pypy/
+  artifacts:
+    paths:
+      - collected-coverage/tox/
+
+pages:
+  image: "debian"
+  stage: deploy
+  dependencies:
+    - test:3.7
+    - test:tox
+    - test:tox-on-buster
+    - test:tox-on-pypy
+  script:
+    - apt-get update
+    - apt-get -y install python3-pip
+    - python3 -m pip install coverage
+    - rm -f .coverage* public
+    - mv collected-coverage/*/.coverage* .
+    - python3 -m coverage combine
+    - python3 -m coverage report --include=aiocoap/\*
+    - python3 -m coverage html --include=aiocoap/\*
+    - mv htmlcov public
+  artifacts:
+    paths:
+      - public
+
+include:
+  - template: SAST.gitlab-ci.yml
+  - template: License-Scanning.gitlab-ci.yml
